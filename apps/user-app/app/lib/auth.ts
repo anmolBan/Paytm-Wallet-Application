@@ -1,75 +1,77 @@
 import db from "@repo/db/client";
-import CredenitalsProvider from "next-auth/providers/credentials";
+import CredentialsProvider from "next-auth/providers/credentials"
 import bcrypt from "bcrypt";
-import { Session } from "next-auth";
-import { JWT } from "next-auth/jwt";
-
-interface CredentialsType{
-    phone: string;
-    password: string;
-}
-
-interface CustomSession extends Session {
-    user: {
-        id: string;  // Add the `id` property
-        name?: string | null;
-        email?: string | null;
-        image?: string | null;
-    };
-}
+import { userSigninSchema } from "@repo/zod-types/zod-types";
 
 export const authOptions = {
     providers: [
-        CredenitalsProvider({
-            name: "Credentials",
+        CredentialsProvider({
+            name: 'Credentials',
             credentials: {
-                phone: { label: "Phone number", type: "text", placeholder: "1234567890" },
-                password: { label: "Password", type: "password" }
+                phone: { label: "Phone number", type: "text", placeholder: "1231231231", required: true },
+                password: { label: "Password", type: "password", required: true }
             },
-            async authorize(credentials: CredentialsType | undefined){
-                if(!credentials){
-                    console.error("No credentials provided.");
-                    throw new Error("Missing credentials.");
+            // TODO: User credentials type from next-aut
+            async authorize(credentials: any) {
+                
+                const loginCredentials = {
+                    number: credentials.phone,
+                    password: credentials.password
                 }
 
-                try{
-                    if(credentials.phone.length === 0 || credentials.password.length === 0){
-                        return null;
-                    }
+                const parsedCredentials = userSigninSchema.safeParse(loginCredentials);
+
+                if(!parsedCredentials.success){
+                    return null;
+                }
+              
+                try {
+                    const hashedPassword = await bcrypt.hash(credentials.password, 10);
                     const existingUser = await db.user.findFirst({
                         where: {
                             number: credentials.phone
                         }
                     });
 
-                    if(existingUser){
-                        const isPasswordValid = await bcrypt.compare(credentials.password, existingUser.password);
-                        if(!isPasswordValid){
-                            console.error(`Invalid passowrd for phone: ${credentials.phone}`);
-                            throw new Error("Invalid password.");
+                    if (existingUser) {
+                        const passwordValidation = await bcrypt.compare(credentials.password, existingUser.password);
+                        if (passwordValidation) {
+                            return {
+                                id: existingUser.id.toString(),
+                                name: existingUser.name,
+                                email: existingUser.number
+                            }
                         }
-
-                        return {
-                            id: existingUser.id.toString(),
-                            name: existingUser.name,
-                            phone: existingUser.number
-                        };
+                        return null;
                     }
 
-                    return null;
-                } catch(error){
-                    console.error("Error during authorization:", error);
-                    throw new Error("Authorization failed. Please try again later.");
+                    const user = await db.user.create({
+                        data: {
+                            number: credentials.phone,
+                            password: hashedPassword
+                        }
+                    });
+            
+                    return {
+                        id: user.id.toString(),
+                        name: user.name,
+                        email: user.number
+                    }
+                } catch(e) {
+                    console.error(e);
                 }
-            }
-        })
+                return null
+            },
+        }),
     ],
     secret: process.env.JWT_SECRET || "secret",
     callbacks: {
-        async session({ token, session }: {token: JWT, session: CustomSession}){
-            session.user!.id = token.sub!;
+        // TODO: can u fix the type here? Using any is bad
+        async session({ token, session }: any) {
+            session.user.id = token.sub
 
-            return session;
+            return session
         }
     }
-}
+  }
+  
