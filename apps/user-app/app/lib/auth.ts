@@ -1,6 +1,22 @@
 import db from "@repo/db/client";
 import CredenitalsProvider from "next-auth/providers/credentials";
 import bcrypt from "bcrypt";
+import { Session } from "next-auth";
+import { JWT } from "next-auth/jwt";
+
+interface CredentialsType{
+    phone: string;
+    password: string;
+}
+
+interface CustomSession extends Session {
+    user: {
+        id: string;  // Add the `id` property
+        name?: string | null;
+        email?: string | null;
+        image?: string | null;
+    };
+}
 
 export const authOptions = {
     providers: [
@@ -10,50 +26,48 @@ export const authOptions = {
                 phone: { label: "Phone number", type: "text", placeholder: "1234567890" },
                 password: { label: "Password", type: "password" }
             },
-            async authorize(credentials: any){
-                const hashedPassword = await bcrypt.hash(credentials.password, 10);
-                const existingUser = await db.user.findFirst({
-                    where: {
-                        number: credentials.phone
-                    }
-                });
-
-                if(existingUser){
-                    const passwordValidation = await bcrypt.compare(credentials.password, existingUser.password);
-                    if(passwordValidation){
-                        return{
-                            id: existingUser.id.toString(),
-                            name: existingUser.name,
-                            phone: existingUser.number
-                        }
-                    }
-                    return null;
+            async authorize(credentials: CredentialsType | undefined){
+                if(!credentials){
+                    console.error("No credentials provided.");
+                    throw new Error("Missing credentials.");
                 }
+
                 try{
-                    const user = await db.user.create({
-                        data: {
-                            number: credentials.phone,
-                            password: hashedPassword
+                    if(credentials.phone.length === 0 || credentials.password.length === 0){
+                        return null;
+                    }
+                    const existingUser = await db.user.findFirst({
+                        where: {
+                            number: credentials.phone
                         }
                     });
 
-                    return {
-                        id: user.id.toString(),
-                        name: user.name,
-                        number: user.number
-                    }
-                } catch(error){
-                    console.error(error);
-                }
+                    if(existingUser){
+                        const isPasswordValid = await bcrypt.compare(credentials.password, existingUser.password);
+                        if(!isPasswordValid){
+                            console.error(`Invalid passowrd for phone: ${credentials.phone}`);
+                            throw new Error("Invalid password.");
+                        }
 
-                return null;
-            },
+                        return {
+                            id: existingUser.id.toString(),
+                            name: existingUser.name,
+                            phone: existingUser.number
+                        };
+                    }
+
+                    return null;
+                } catch(error){
+                    console.error("Error during authorization:", error);
+                    throw new Error("Authorization failed. Please try again later.");
+                }
+            }
         })
     ],
     secret: process.env.JWT_SECRET || "secret",
     callbacks: {
-        async session({ token, session }: any){
-            session.user.id = token.sub;
+        async session({ token, session }: {token: JWT, session: CustomSession}){
+            session.user!.id = token.sub!;
 
             return session;
         }
